@@ -7,6 +7,7 @@
 #include <assert.h>
 #include <string.h>
 #include <stdint.h>
+#include <stdbool.h>
 #include <stdio.h>
 #include "esp_log.h"
 #include "esp_timer.h"
@@ -68,13 +69,40 @@ void print_periodic_adv_data(struct ble_gap_event *event)
 {
     static int paquetes = 0;
     static int bytes = 0;
-    static int truncados = 0;
+    static int parciales = 0;   /* status 1: vienen mas fragmentos */
+    static int truncados = 0;   /* status 2: llego pero incompleto */
+    static int faltan = 0;      /* huecos en la secuencia: NO llegaron */
+    static int tramas = 0;      /* tramas completas vistas */
+    static uint16_t seq_prev = 0;
+    static bool hay_prev = false;
     static int64_t t0 = 0;
 
     paquetes++;
     bytes += event->periodic_report.data_length;
-    if (event->periodic_report.data_status != 0) {
+    if (event->periodic_report.data_status == 1) {
+        parciales++;
+    } else if (event->periodic_report.data_status == 2) {
         truncados++;
+    }
+
+    /* La secuencia va en data[4..5] del PRIMER fragmento. En el segundo
+     * esos bytes son carga: leerla ahi daria basura.
+     * Una trama que se pierde ENTERA no genera ningun reporte, asi que
+     * data_status no la ve. El hueco en la secuencia es la unica forma
+     * de detectarla. */
+    if (event->periodic_report.data_status == 1 &&
+        event->periodic_report.data_length > 5) {
+        uint16_t seq = event->periodic_report.data[4] |
+                       ((uint16_t)event->periodic_report.data[5] << 8);
+        tramas++;
+        if (hay_prev) {
+            uint16_t salto = seq - seq_prev;   /* da la vuelta solo */
+            if (salto > 1) {
+                faltan += salto - 1;
+            }
+        }
+        seq_prev = seq;
+        hay_prev = true;
     }
 
     int64_t ahora = esp_timer_get_time() / 1000;
@@ -82,14 +110,22 @@ void print_periodic_adv_data(struct ble_gap_event *event)
         t0 = ahora;
         return;
     }
-    if (ahora - t0 >= 1000) {
-        MODLOG_DFLT(INFO, "%d paq/s  %d B/s  rssi %d  trunc %d  seq %02x\n",
-                    paquetes, bytes, event->periodic_report.rssi, truncados,
-                    event->periodic_report.data_length > 4 ?
-                        event->periodic_report.data[4] : 0);
+    int64_t dt = ahora - t0;
+    if (dt >= 1000) {
+        /* se normaliza por el tiempo REAL de la ventana: t0 = ahora
+           dejaba ventanas de 1.00 a 1.14 s y falseaba el caudal */
+        int total = tramas + faltan;
+        MODLOG_DFLT(INFO,
+                    "%d paq/s  %d B/s  rssi %d  tramas %d  FALTAN %d (%d%%)  trunc %d\n",
+                    (int)(paquetes * 1000 / dt), (int)(bytes * 1000 / dt),
+                    event->periodic_report.rssi, tramas, faltan,
+                    total ? faltan * 100 / total : 0, truncados);
         paquetes = 0;
         bytes = 0;
+        parciales = 0;
         truncados = 0;
+        faltan = 0;
+        tramas = 0;
         t0 = ahora;
     }
 }
