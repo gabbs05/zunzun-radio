@@ -16,7 +16,7 @@
  * contador da la vuelta cada 5 s y no se distingue "perdi 1" de
  * "perdi 257".
  */
-#define REFRESCO_MS 150          /* = intervalo de anuncio, ver abajo */
+#define REFRESCO_MS 20           /* = intervalo de anuncio */
 
 static uint8_t mfg_data[250] = { 0xff, 0xff, 0x00, 0x00, 0x00, 0x00 };
 static uint16_t seq;
@@ -63,7 +63,7 @@ int main(void)
 		 * elegia 0x0078 (150 ms) y el refresco de 141 ms pisaba
 		 * tramas antes de emitirlas. 0x0078 = 120 * 1.25 = 150 ms.
 		 */
-		BT_LE_PER_ADV_PARAM(0x0078, 0x0078,
+		BT_LE_PER_ADV_PARAM(0x0010, 0x0010,
 				   BT_LE_PER_ADV_OPT_NONE));
 	if (err) {
 		printk("Failed to set periodic advertising parameters"
