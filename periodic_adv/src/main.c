@@ -6,7 +6,20 @@
 
 #include <zephyr/bluetooth/bluetooth.h>
 
-static uint8_t mfg_data[100] = { 0xff, 0xff, 0x00 };
+/* Trama del enlace ZUNZUN
+ *   0-1  0xFFFF   identificador de fabricante (obligatorio en el AD)
+ *   2-3  seq      contador de 16 bits, +1 por trama, little endian
+ *   4    idioma   0=en 1=fr 2=de 3=pt
+ *   5    reservado
+ *   6+   carga
+ * La secuencia va en 16 bits a proposito: con 8 bits, a 50 tramas/s el
+ * contador da la vuelta cada 5 s y no se distingue "perdi 1" de
+ * "perdi 257".
+ */
+#define REFRESCO_MS 150          /* = intervalo de anuncio, ver abajo */
+
+static uint8_t mfg_data[250] = { 0xff, 0xff, 0x00, 0x00, 0x00, 0x00 };
+static uint16_t seq;
 
 static const struct bt_data per_adv_ad[] = {
 	BT_DATA(BT_DATA_MANUFACTURER_DATA, mfg_data, sizeof(mfg_data)),
@@ -46,9 +59,12 @@ int main(void)
 
 	/* Set periodic advertising parameters */
 	err = bt_le_per_adv_set_param(adv,
-		BT_LE_PER_ADV_PARAM(BT_GAP_PER_ADV_FAST_INT_MIN_2,
-				    BT_GAP_PER_ADV_FAST_INT_MAX_2,
-				    BT_LE_PER_ADV_OPT_NONE));
+		/* Intervalo FIJO, no un rango: con MIN/MAX el controlador
+		 * elegia 0x0078 (150 ms) y el refresco de 141 ms pisaba
+		 * tramas antes de emitirlas. 0x0078 = 120 * 1.25 = 150 ms.
+		 */
+		BT_LE_PER_ADV_PARAM(0x0078, 0x0078,
+				   BT_LE_PER_ADV_OPT_NONE));
 	if (err) {
 		printk("Failed to set periodic advertising parameters"
 		       " (err %d)\n", err);
@@ -72,18 +88,23 @@ int main(void)
 		}
 		printk("done.\n");
 
-		for (int i = 0; i < 3; i++) {
-			k_sleep(K_SECONDS(10));
-
-			mfg_data[2]++;
-
-			printk("Set Periodic Advertising Data...");
-			err = bt_le_per_adv_set_data(adv, per_adv_ad, ARRAY_SIZE(per_adv_ad));
+		/* Antes esto era el bucle del sample de Nordic: subia un
+		 * contador cada 10 s solo para demostrar que los datos se
+		 * pueden cambiar en caliente. Con eso no se puede medir
+		 * perdida de paquetes. Ahora se refresca a ritmo de trama.
+		 */
+		while (true) {
+			k_sleep(K_MSEC(REFRESCO_MS));
+			seq++;
+			mfg_data[2] = (uint8_t)(seq & 0xff);
+			mfg_data[3] = (uint8_t)(seq >> 8);
+			err = bt_le_per_adv_set_data(adv, per_adv_ad,
+						     ARRAY_SIZE(per_adv_ad));
 			if (err) {
-				printk("Failed (err %d)\n", err);
+				printk("set_data fallo (err %d) en seq %u\n",
+				       err, seq);
 				return 0;
 			}
-			printk("done.\n");
 		}
 
 		k_sleep(K_SECONDS(10));
